@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Demo</title>
+    <!-- Prevent dark mode flash -->
+    <script>
+        // Set dark mode immediately to prevent flash
+        (function() {
+            const isDarkMode = localStorage.getItem('darkMode') === 'true' || 
+                              (!localStorage.getItem('darkMode') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (isDarkMode) {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'fade-in': 'fadeIn 0.3s ease-in-out',
+                        'slide-up': 'slideUp 0.3s ease-out',
+                        'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'typing': 'typing 0.5s ease-in-out',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        },
+                        slideUp: {
+                            '0%': { transform: 'translateY(10px)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' },
+                        },
+                        typing: {
+                            '0%': { opacity: '0', transform: 'translateY(5px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Custom scrollbar styles -->
+    <style>
+        /* Webkit scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: rgba(156, 163, 175, 0.5);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(156, 163, 175, 0.7);
+        }
+        
+        .dark ::-webkit-scrollbar-thumb {
+            background: rgba(75, 85, 99, 0.5);
+        }
+        
+        .dark ::-webkit-scrollbar-thumb:hover {
+            background: rgba(75, 85, 99, 0.7);
+        }
+        
+        /* Firefox scrollbar styling */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+        }
+        
+        .dark * {
+            scrollbar-color: rgba(75, 85, 99, 0.5) transparent;
+        }
+        
+        /* Improved markdown styling */
+        .prose ul {
+            list-style-type: disc;
+            padding-left: 1.5rem;
+            margin: 1rem 0;
+        }
+        
+        .prose ol {
+            list-style-type: decimal;
+            padding-left: 1.5rem;
+            margin: 1rem 0;
+        }
+        
+        .prose li {
+            margin: 0.5rem 0;
+            line-height: 1.6;
+        }
+        
+        .prose ul ul, .prose ol ol, .prose ul ol, .prose ol ul {
+            margin-top: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .prose blockquote {
+            border-left: 4px solid #e5e7eb;
+            padding-left: 1rem;
+            margin: 1rem 0;
+            font-style: italic;
+        }
+        
+        .dark .prose blockquote {
+            border-left-color: #374151;
+        }
+        
+        .prose code {
+            background-color: #f3f4f6;
+            padding: 0.125rem 0.25rem;
+            border-radius: 0.25rem;
+            font-size: 0.875em;
+        }
+        
+        .dark .prose code {
+            background-color: #374151;
+        }
+        
+        .prose pre {
+            background-color: #f3f4f6;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+        
+        .dark .prose pre {
+            background-color: #1f2937;
+        }
+        
+        .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+            font-weight: 600;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .prose p {
+            margin: 0.75rem 0;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body class="h-full bg-gray-50 dark:bg-gray-900 transition-colors duration-300 overflow-hidden">
+    <div class="flex flex-col h-screen relative">
+        <!-- Settings Button (Fixed Position) -->
+        <button id="settings-btn" class="fixed top-4 right-4 z-50 p-2 rounded-lg bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200 shadow-md">
+            <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+            </svg>
+        </button>
+
+        <!-- Settings Panel -->
+        <div id="settings-panel" class="hidden fixed top-16 right-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-xl p-4 z-50 min-w-64">
+            <h3 class="text-sm font-medium text-gray-900 dark:text-white mb-3">Settings</h3>
+            
+            <!-- API Key Section -->
+            <div class="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <label for="api-key-input" class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Google API Key
+                </label>
+                <div class="relative">
+                    <input 
+                        type="password" 
+                        id="api-key-input" 
+                        placeholder="Enter your API key..."
+                        class="w-full text-xs px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 focus:border-blue-500 dark:focus:border-blue-400 transition-all duration-200"
+                    >
+                    <button 
+                        id="toggle-api-key-visibility" 
+                        type="button" 
+                        class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors duration-200"
+                    >
+                        <svg id="eye-open" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                        <svg id="eye-closed" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"></path>
+                        </svg>
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <a href="https://makersuite.google.com/app/apikey" target="_blank" class="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline">
+                        Get your API key here
+                    </a>
+                </p>
+                <div id="api-key-status" class="mt-2 text-xs hidden">
+                    <span id="api-key-saved" class="text-green-600 dark:text-green-400 hidden">✓ API key saved</span>
+                    <span id="api-key-missing" class="text-red-600 dark:text-red-400 hidden">⚠ API key required</span>
+                </div>
+            </div>
+            
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-sm text-gray-700 dark:text-gray-300">Dark Mode</span>
+                <button id="dark-mode-toggle" class="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-300 dark:bg-blue-600 transition-colors duration-200">
+                    <span class="sr-only">Enable dark mode</span>
+                    <span id="toggle-indicator" class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-200 translate-x-1 dark:translate-x-6"></span>
+                </button>
+            </div>
+            
+            <button id="change-prompt-btn" class="w-full text-left text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200 py-2 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+                Change Prompt
+            </button>
+        </div>
+
+        <!-- Prompt Editing Modal -->
+        <div id="prompt-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-2xl mx-4 max-h-[80vh] overflow-hidden">
+                <div class="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+                    <h2 class="text-xl font-semibold text-gray-900 dark:text-white">Edit Prompt</h2>
+                    <button id="prompt-modal-close" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors duration-200">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <div class="p-6 overflow-y-auto max-h-[60vh]">
+                    <label for="prompt-textarea" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        System Prompt:
+                    </label>
+                    <textarea 
+                        id="prompt-textarea" 
+                        class="w-full h-64 resize-none rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-3 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:border-blue-500 dark:focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 transition-all duration-200"
+                        placeholder="Enter your custom prompt here..."
+                    ></textarea>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                        The prompt will be followed by "QUESTION: [user's question]" and any relevant passages.
+                    </p>
+                </div>
+                
+                <div class="flex items-center justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-700">
+                    <button id="prompt-cancel-btn" class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200">
+                        Cancel
+                    </button>
+                    <button id="prompt-save-btn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors duration-200">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Title (Centered at top) -->
+        <div class="flex justify-center pt-8 pb-4 z-10">
+            <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">Chatbot Demo</h1>
+        </div>
+
+        <!-- Chat Container -->
+        <div class="flex-1 overflow-hidden pb-32">
+            <div id="chatbox" class="h-full overflow-y-auto px-4 py-6 space-y-8">
+                <!-- Welcome Message -->
+                <div class="max-w-4xl mx-auto">
+                    <div class="text-left animate-fade-in">
+                        <div class="text-gray-800 dark:text-gray-200 prose dark:prose-invert max-w-none">
+                            <p class="text-lg">Hello! I'm your AI Career Assistant. Ask me anything about career services, internships, job opportunities, or professional development resources.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Section (Floating) -->
+        <div class="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-gray-50 via-gray-50 dark:from-gray-900 dark:via-gray-900 to-transparent px-4 pt-8 pb-4 z-20">
+            <div class="max-w-4xl mx-auto">
+                <form id="chat-form">
+                    <div class="relative">
+                        <textarea 
+                            id="user-input" 
+                            placeholder="Ask me about career services..."
+                            class="w-full resize-none rounded-2xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-6 py-4 pr-12 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:border-blue-500 dark:focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 shadow-lg transition-all duration-200"
+                            rows="1"
+                            maxlength="2000"
+                            required
+                        ></textarea>
+                        <button 
+                            type="submit" 
+                            id="send-btn"
+                            class="absolute right-2 bottom-2 flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white transition-all duration-200 opacity-0 pointer-events-none"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
