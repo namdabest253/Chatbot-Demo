@@ -5,9 +5,15 @@ from google.genai import types
 from google.api_core import retry
 import pandas as pd
 import chromadb
+from chromadb.config import Settings
 import os
+import logging
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Define a helper to retry when per-minute quota is reached.
 is_retriable = lambda e: (isinstance(e, genai.errors.APIError) and e.code in {429, 503})
@@ -22,21 +28,25 @@ class GeminiEmbeddingFunction(chromadb.EmbeddingFunction): # Inherit from chroma
         if not self.api_key:
             raise ValueError("API key is required for embeddings")
             
-        client = genai.Client(api_key=self.api_key)
-        
-        if self.document_mode:
-            embedding_task = "retrieval_document"
-        else:
-            embedding_task = "retrieval_query"
+        try:
+            client = genai.Client(api_key=self.api_key)
+            
+            if self.document_mode:
+                embedding_task = "retrieval_document"
+            else:
+                embedding_task = "retrieval_query"
 
-        response = client.models.embed_content(
-            model="models/text-embedding-004",
-            contents=input,
-            config=types.EmbedContentConfig(
-                task_type=embedding_task,
-            ),
-        )
-        return [e.values for e in response.embeddings]
+            response = client.models.embed_content(
+                model="models/text-embedding-004",
+                contents=input,
+                config=types.EmbedContentConfig(
+                    task_type=embedding_task,
+                ),
+            )
+            return [e.values for e in response.embeddings]
+        except Exception as e:
+            logger.error(f"Embedding error: {e}")
+            raise
 
 # IMPORTANT: Data loading should happen once when the app starts, not on every request.
 try:
@@ -64,31 +74,58 @@ documents = df.loc[df['dept_id'] == student_department_id, 'rec_content'].tolist
 
 # --- Initialize ChromaDB (without embeddings initially) ---
 DB_NAME = "googlecardb"
-chroma_client = chromadb.Client()
 
-# We'll initialize the collection per-request with user's API key
+# Initialize ChromaDB with disabled telemetry and anonymous usage stats
+try:
+    chroma_client = chromadb.Client(Settings(
+        anonymized_telemetry=False,
+        allow_reset=True
+    ))
+except Exception as e:
+    # Fallback to basic client if settings don't work
+    logger.warning(f"ChromaDB settings failed, using basic client: {e}")
+    chroma_client = chromadb.Client()
+
+# Global variable to track if documents are loaded
+documents_loaded = False
+
 def get_or_create_collection(api_key):
     """Get or create ChromaDB collection with user's API key"""
-    embed_fn = GeminiEmbeddingFunction(api_key=api_key)
-    embed_fn.document_mode = True
+    global documents_loaded
     
-    # Try to get existing collection or create new one
     try:
-        db = chroma_client.get_collection(name=DB_NAME)
-        # Update the embedding function
-        db._embedding_function = embed_fn
-    except:
-        # Create new collection
-        db = chroma_client.create_collection(name=DB_NAME, embedding_function=embed_fn)
-    
-    # Add documents only if the collection is empty (to avoid duplicates)
-    if db.count() == 0:
-        print("Adding documents to ChromaDB...")
-        db.add(documents=documents, ids=[str(i) for i in range(len(documents))])
-    else:
-        print("ChromaDB already contains documents.")
-    
-    return db
+        embed_fn = GeminiEmbeddingFunction(api_key=api_key)
+        embed_fn.document_mode = True
+        
+        # Try to get existing collection first
+        try:
+            db = chroma_client.get_collection(name=DB_NAME)
+            # Update the embedding function
+            db._embedding_function = embed_fn
+            logger.info("Retrieved existing ChromaDB collection")
+        except Exception:
+            # Create new collection if it doesn't exist
+            logger.info("Creating new ChromaDB collection")
+            db = chroma_client.create_collection(name=DB_NAME, embedding_function=embed_fn)
+        
+        # Add documents only once across all requests
+        if not documents_loaded and db.count() == 0:
+            logger.info("Adding documents to ChromaDB...")
+            try:
+                db.add(documents=documents, ids=[str(i) for i in range(len(documents))])
+                documents_loaded = True
+                logger.info(f"Successfully added {len(documents)} documents")
+            except Exception as e:
+                logger.error(f"Error adding documents: {e}")
+                # Continue without documents rather than failing
+        else:
+            logger.info("ChromaDB already contains documents.")
+        
+        return db
+        
+    except Exception as e:
+        logger.error(f"ChromaDB collection error: {e}")
+        raise Exception("Database initialization failed. Please try again.")
 
 # --- Flask Routes ---
 
@@ -120,8 +157,12 @@ def ask_chatbot():
         embed_fn.document_mode = False
 
         # Search the Chroma DB using the specified query.
-        result = db.query(query_texts=[user_query], n_results=5) # Retrieve top 5 passages
-        retrieved_passages = result["documents"][0] if result["documents"] else []
+        try:
+            result = db.query(query_texts=[user_query], n_results=5) # Retrieve top 5 passages
+            retrieved_passages = result["documents"][0] if result["documents"] else []
+        except Exception as e:
+            logger.error(f"ChromaDB query error: {e}")
+            retrieved_passages = []  # Continue without retrieved passages
 
         # Construct the prompt for Gemini
         query_oneline = user_query.replace("\n", " ")
@@ -142,7 +183,7 @@ QUESTION: {query_oneline}
 """
         
         # Add *only* the retrieved passages to the prompt
-        for passage in retrieved_passages: # Use retrieved_passages here, not 'documents'
+        for passage in retrieved_passages:
             passage_oneline = passage.replace("\n", " ")
             prompt += f"PASSAGE: {passage_oneline}\n"
 
@@ -153,19 +194,29 @@ QUESTION: {query_oneline}
             )
             answer_text = gemini_answer.text
         except Exception as e:
-            answer_text = f"Sorry, an error occurred while generating the response: {e}"
-            print(f"Gemini API Error: {e}")
+            logger.error(f"Gemini API Error: {e}")
+            # More specific error messages
+            error_str = str(e).lower()
+            if "api key" in error_str or "authentication" in error_str:
+                answer_text = "Invalid API key. Please check your Google API key in the settings."
+            elif "quota" in error_str or "limit" in error_str:
+                answer_text = "API quota exceeded. Please try again later or check your API key limits."
+            else:
+                answer_text = "Sorry, there was an issue generating the response. Please try again."
 
     except Exception as e:
-        if "API_KEY_INVALID" in str(e) or "invalid API key" in str(e).lower():
+        logger.error(f"General API Error: {e}")
+        # Handle various error types
+        error_str = str(e).lower()
+        if "api key" in error_str or "authentication" in error_str or "invalid" in error_str:
             answer_text = "Invalid API key. Please check your Google API key in the settings."
+        elif "database" in error_str:
+            answer_text = "Database temporarily unavailable. Please try again."
         else:
-            answer_text = f"Sorry, an error occurred: {e}"
-        print(f"API Error: {e}")
+            answer_text = "Sorry, an error occurred. Please try again."
 
     return jsonify({"answer": answer_text})
 
 if __name__ == '__main__':
-    # app.run(debug=True, port=5000)
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
