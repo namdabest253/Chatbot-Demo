@@ -377,10 +377,10 @@ def ask_chatbot():
 
     return jsonify({"answer": answer_text})
 
+# Preload CSV files from data directory when module is imported
+logger.info("Preloading CSV files from data directory...")
+preload_csv_files()
+
 if __name__ == '__main__':
-    # Preload CSV files from data directory at startup
-    logger.info("Starting application and preloading CSV files...")
-    preload_csv_files()
-    
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
