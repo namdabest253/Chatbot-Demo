@@ -17,6 +17,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const apiKeySaved = document.getElementById('api-key-saved');
     const apiKeyMissing = document.getElementById('api-key-missing');
     
+    // University dropdown elements
+    const universityDropdownBtn = document.getElementById('university-dropdown-btn');
+    const universityDropdownMenu = document.getElementById('university-dropdown-menu');
+    const selectedUniversity = document.getElementById('selected-university');
+    const universitySearch = document.getElementById('university-search');
+    const universityList = document.getElementById('university-list');
+    
+    // University management elements
+    const manageUniversitiesBtn = document.getElementById('manage-universities-btn');
+    const universityModal = document.getElementById('university-modal');
+    const universityModalClose = document.getElementById('university-modal-close');
+    const universityModalCloseBtn = document.getElementById('university-modal-close-btn');
+    const universityFileInput = document.getElementById('university-file-input');
+    const uploadStatus = document.getElementById('upload-status');
+    const uploadProgress = document.getElementById('upload-progress');
+    const uploadProgressBar = document.getElementById('upload-progress-bar');
+    const uploadMessage = document.getElementById('upload-message');
+    const universitiesList = document.getElementById('universities-list');
+    
+    // Selection modal elements
+    const universitySelectionModal = document.getElementById('university-selection-modal');
+    const selectionUploadBtn = document.getElementById('selection-upload-btn');
+    const selectionCloseBtn = document.getElementById('selection-close-btn');
+    
     // Prompt editing elements
     const changePromptBtn = document.getElementById('change-prompt-btn');
     const promptModal = document.getElementById('prompt-modal');
@@ -32,6 +56,11 @@ strike a friendly and conversational tone. Give additional advice on top of the 
 
 **Please format your response using Markdown, including bullet points, bold text, and proper spacing where appropriate.**`;
 
+    // Global state
+    let availableUniversities = [];
+    let selectedUniversityName = null;
+    let filteredUniversities = [];
+
     // Initialize dark mode
     initializeDarkMode();
     
@@ -40,6 +69,9 @@ strike a friendly and conversational tone. Give additional advice on top of the 
     
     // Initialize API key
     initializeApiKey();
+    
+    // Initialize universities
+    initializeUniversities();
 
     // Auto-resize textarea
     setupTextareaAutoResize();
@@ -96,6 +128,64 @@ strike a friendly and conversational tone. Give additional advice on top of the 
         toggleApiKeyVisibilityState();
     });
 
+    // University dropdown event listeners
+    universityDropdownBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        universityDropdownMenu.classList.toggle('hidden');
+        if (!universityDropdownMenu.classList.contains('hidden')) {
+            universitySearch.focus();
+        }
+    });
+
+    universitySearch.addEventListener('input', () => {
+        filterUniversities();
+    });
+
+    // University management event listeners
+    manageUniversitiesBtn.addEventListener('click', () => {
+        openUniversityModal();
+    });
+
+    universityModalClose.addEventListener('click', () => {
+        closeUniversityModal();
+    });
+
+    universityModalCloseBtn.addEventListener('click', () => {
+        closeUniversityModal();
+    });
+
+    universityFileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            uploadUniversityFile(e.target.files[0]);
+        }
+    });
+
+    // Close university dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!universityDropdownBtn.contains(e.target) && !universityDropdownMenu.contains(e.target)) {
+            universityDropdownMenu.classList.add('hidden');
+        }
+    });
+
+    // Close university modal when clicking outside
+    universityModal.addEventListener('click', (e) => {
+        if (e.target === universityModal) {
+            closeUniversityModal();
+        }
+    });
+
+
+
+    // Selection modal event listeners
+    selectionUploadBtn.addEventListener('click', () => {
+        universitySelectionModal.classList.add('hidden');
+        openUniversityModal();
+    });
+
+    selectionCloseBtn.addEventListener('click', () => {
+        universitySelectionModal.classList.add('hidden');
+    });
+
     // Form submission
     chatForm.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -117,12 +207,17 @@ strike a friendly and conversational tone. Give additional advice on top of the 
         const typingIndicator = appendTypingIndicator();
 
         try {
-            // Send query to Flask backend with custom prompt and API key
+            // Send query to Flask backend with custom prompt, API key, and selected university
             const customPrompt = getCurrentPrompt();
             const apiKey = getCurrentApiKey();
             
             if (!apiKey) {
                 throw new Error('Please enter your Google API key in the settings.');
+            }
+            
+            if (!selectedUniversityName) {
+                showUniversitySelectionModal();
+                throw new Error('Please select a university from the dropdown.');
             }
             
             const response = await fetch('/ask', {
@@ -133,7 +228,8 @@ strike a friendly and conversational tone. Give additional advice on top of the 
                 body: JSON.stringify({ 
                     query: query,
                     custom_prompt: customPrompt,
-                    api_key: apiKey
+                    api_key: apiKey,
+                    university_name: selectedUniversityName
                 })
             });
 
@@ -475,5 +571,356 @@ strike a friendly and conversational tone. Give additional advice on top of the 
             eyeOpen.classList.add('hidden');
             eyeClosed.classList.remove('hidden');
         }
+    }
+
+    // University management functions
+    async function initializeUniversities() {
+        try {
+            // Try to load from local storage first
+            const savedUniversities = loadUniversitiesFromLocalStorage();
+            if (savedUniversities && savedUniversities.length > 0) {
+                availableUniversities = savedUniversities;
+                filteredUniversities = [...availableUniversities];
+                updateUniversityDropdown();
+                updateUniversitiesList();
+                console.log(`Loaded ${availableUniversities.length} universities from local storage`);
+            }
+            
+            // Always sync with server to get any new data
+            await loadUniversities();
+            
+            if (availableUniversities.length > 0) {
+                // Don't auto-select - let user choose
+                selectedUniversityName = null;
+                updateSelectedUniversity();
+            } else {
+                // Show selection modal if no universities available
+                showUniversitySelectionModal();
+            }
+        } catch (error) {
+            console.error('Error loading universities:', error);
+            selectedUniversity.textContent = 'Error loading universities';
+        }
+    }
+
+    function saveUniversitiesToLocalStorage() {
+        try {
+            localStorage.setItem('universitiesData', JSON.stringify(availableUniversities));
+            console.log('Universities saved to local storage');
+        } catch (error) {
+            console.error('Error saving universities to local storage:', error);
+        }
+    }
+
+    function loadUniversitiesFromLocalStorage() {
+        try {
+            const savedData = localStorage.getItem('universitiesData');
+            if (savedData) {
+                return JSON.parse(savedData);
+            }
+        } catch (error) {
+            console.error('Error loading universities from local storage:', error);
+        }
+        return null;
+    }
+
+    function removeUniversityFromLocalStorage(universityName) {
+        try {
+            const savedUniversities = loadUniversitiesFromLocalStorage();
+            if (savedUniversities) {
+                const updatedUniversities = savedUniversities.filter(
+                    uni => uni.name !== universityName
+                );
+                localStorage.setItem('universitiesData', JSON.stringify(updatedUniversities));
+                console.log(`Removed ${universityName} from local storage`);
+            }
+        } catch (error) {
+            console.error('Error removing university from local storage:', error);
+        }
+    }
+
+    async function loadUniversities() {
+        try {
+            const response = await fetch('/api/universities');
+            if (!response.ok) {
+                throw new Error('Failed to load universities');
+            }
+            const data = await response.json();
+            const serverUniversities = data.universities || [];
+            
+            // Merge server data with local storage, prioritizing server data
+            const mergedUniversities = [...serverUniversities];
+            
+            // Add any universities from local storage that aren't on server
+            const savedUniversities = loadUniversitiesFromLocalStorage();
+            if (savedUniversities) {
+                savedUniversities.forEach(savedUni => {
+                    if (!serverUniversities.find(serverUni => serverUni.name === savedUni.name)) {
+                        mergedUniversities.push(savedUni);
+                    }
+                });
+            }
+            
+            availableUniversities = mergedUniversities;
+            filteredUniversities = [...availableUniversities];
+            
+            // Save merged data to local storage
+            saveUniversitiesToLocalStorage();
+            
+            updateUniversityDropdown();
+            updateUniversitiesList();
+        } catch (error) {
+            console.error('Error loading universities:', error);
+            // If server fails, try to use local storage
+            const savedUniversities = loadUniversitiesFromLocalStorage();
+            if (savedUniversities) {
+                availableUniversities = savedUniversities;
+                filteredUniversities = [...availableUniversities];
+                updateUniversityDropdown();
+                updateUniversitiesList();
+                console.log('Using local storage due to server error');
+            }
+            throw error;
+        }
+    }
+
+    function updateSelectedUniversity() {
+        if (selectedUniversityName) {
+            selectedUniversity.textContent = selectedUniversityName;
+        } else {
+            selectedUniversity.textContent = 'Select University';
+            // Show selection modal if trying to chat without university selected
+        }
+    }
+
+    function updateUniversityDropdown() {
+        universityList.innerHTML = '';
+        
+        filteredUniversities.forEach(university => {
+            const item = document.createElement('div');
+            item.className = 'px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer border-b border-gray-100 dark:border-gray-600 last:border-b-0';
+            item.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-gray-900 dark:text-white">${escapeHtml(university.name)}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">${university.document_count} documents</p>
+                    </div>
+                </div>
+            `;
+            
+            item.addEventListener('click', () => {
+                selectedUniversityName = university.name;
+                updateSelectedUniversity();
+                universityDropdownMenu.classList.add('hidden');
+                universitySearch.value = '';
+                filterUniversities();
+            });
+            
+            universityList.appendChild(item);
+        });
+        
+        if (filteredUniversities.length === 0) {
+            const noResults = document.createElement('div');
+            noResults.className = 'px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center';
+            noResults.textContent = 'No universities found';
+            universityList.appendChild(noResults);
+        }
+    }
+
+    function filterUniversities() {
+        const searchTerm = universitySearch.value.toLowerCase();
+        filteredUniversities = availableUniversities.filter(university =>
+            university.name.toLowerCase().includes(searchTerm)
+        );
+        updateUniversityDropdown();
+    }
+
+    function openUniversityModal() {
+        universityModal.classList.remove('hidden');
+        settingsPanel.classList.add('hidden');
+        loadUniversities(); // Refresh the list
+        resetUploadStatus();
+    }
+
+    function closeUniversityModal() {
+        universityModal.classList.add('hidden');
+        resetUploadStatus();
+    }
+
+    function resetUploadStatus() {
+        uploadStatus.classList.add('hidden');
+        uploadProgress.classList.add('hidden');
+        uploadProgressBar.style.width = '0%';
+        uploadMessage.textContent = '';
+        universityFileInput.value = '';
+    }
+
+    async function uploadUniversityFile(file) {
+        if (!file) return;
+        
+        // Check if university already exists before uploading
+        const fileName = file.name.toLowerCase();
+        const existingUniversity = availableUniversities.find(uni => 
+            fileName.includes(uni.name.toLowerCase()) || 
+            uni.name.toLowerCase().includes(fileName.replace('.csv', '').replace(/[^a-z\s]/g, ''))
+        );
+        
+        if (existingUniversity) {
+            uploadStatus.classList.remove('hidden');
+            uploadMessage.textContent = `A university with similar name "${existingUniversity.name}" already exists. Please delete it first if you want to replace it.`;
+            uploadMessage.className = 'text-sm mt-2 text-red-600 dark:text-red-400';
+            return;
+        }
+        
+        // Show upload status
+        uploadStatus.classList.remove('hidden');
+        uploadProgress.classList.remove('hidden');
+        uploadProgressBar.style.width = '10%';
+        uploadMessage.textContent = 'Uploading file...';
+        uploadMessage.className = 'text-sm mt-2 text-blue-600 dark:text-blue-400';
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            // Simulate progress
+            uploadProgressBar.style.width = '50%';
+            
+            const response = await fetch('/api/universities/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            uploadProgressBar.style.width = '90%';
+            
+            const result = await response.json();
+            
+            uploadProgressBar.style.width = '100%';
+            
+            if (response.ok) {
+                uploadMessage.textContent = result.message;
+                uploadMessage.className = 'text-sm mt-2 text-green-600 dark:text-green-400';
+                
+                // Reload universities and update dropdown
+                await loadUniversities();
+                
+                // Auto-select the new university
+                if (result.university) {
+                    selectedUniversityName = result.university.name;
+                    updateSelectedUniversity();
+                }
+                
+                // Hide progress after success
+                setTimeout(() => {
+                    uploadProgress.classList.add('hidden');
+                }, 2000);
+                
+            } else {
+                uploadMessage.textContent = result.error || 'Upload failed';
+                uploadMessage.className = 'text-sm mt-2 text-red-600 dark:text-red-400';
+                uploadProgress.classList.add('hidden');
+            }
+        } catch (error) {
+            console.error('Upload error:', error);
+            uploadMessage.textContent = 'Error uploading file. Please try again.';
+            uploadMessage.className = 'text-sm mt-2 text-red-600 dark:text-red-400';
+            uploadProgress.classList.add('hidden');
+        }
+    }
+
+    function updateUniversitiesList() {
+        universitiesList.innerHTML = '';
+        
+        availableUniversities.forEach(university => {
+            const item = document.createElement('div');
+            item.className = 'flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600';
+            
+            item.innerHTML = `
+                <div class="flex-1">
+                    <div class="flex items-center gap-2">
+                        <h4 class="text-sm font-medium text-gray-900 dark:text-white">${escapeHtml(university.name)}</h4>
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">${university.document_count} documents</p>
+                </div>
+                <div class="flex gap-2">
+                    <button class="delete-university-btn px-3 py-1 text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 border border-red-300 dark:border-red-600 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors duration-200" data-university="${escapeHtml(university.name)}">
+                        Delete
+                    </button>
+                </div>
+            `;
+            
+            const deleteBtn = item.querySelector('.delete-university-btn');
+            
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', () => {
+                    deleteUniversity(university.name);
+                });
+            }
+            
+            universitiesList.appendChild(item);
+        });
+        
+        if (availableUniversities.length === 0) {
+            const noUniversities = document.createElement('div');
+            noUniversities.className = 'text-center py-8 text-gray-500 dark:text-gray-400';
+            noUniversities.textContent = 'No universities available';
+            universitiesList.appendChild(noUniversities);
+        }
+    }
+
+    async function deleteUniversity(universityName) {
+        if (!confirm(`Are you sure you want to delete "${universityName}"? This action cannot be undone.`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/universities/${encodeURIComponent(universityName)}`, {
+                method: 'DELETE'
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                // Remove from local storage first
+                removeUniversityFromLocalStorage(universityName);
+                
+                // Reload universities
+                await loadUniversities();
+                
+                // If deleted university was selected, clear selection
+                if (selectedUniversityName === universityName) {
+                    selectedUniversityName = null;
+                    updateSelectedUniversity();
+                    
+                    // Show selection modal if no universities left
+                    if (availableUniversities.length === 0) {
+                        showUniversitySelectionModal();
+                    }
+                }
+                
+                console.log(result.message);
+            } else {
+                alert(result.error || 'Failed to delete university');
+            }
+        } catch (error) {
+            console.error('Error deleting university:', error);
+            // Even if server delete fails, remove from local storage
+            removeUniversityFromLocalStorage(universityName);
+            
+            // Update local display
+            availableUniversities = availableUniversities.filter(uni => uni.name !== universityName);
+            filteredUniversities = [...availableUniversities];
+            updateUniversityDropdown();
+            updateUniversitiesList();
+            
+            alert('University removed from local storage. Server deletion may have failed.');
+        }
+    }
+
+
+
+    // University selection modal functions
+    function showUniversitySelectionModal() {
+        universitySelectionModal.classList.remove('hidden');
     }
 });

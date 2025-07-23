@@ -8,8 +8,14 @@ import chromadb
 from chromadb.config import Settings
 import os
 import logging
+import json
+import glob
+from werkzeug.utils import secure_filename
+import tempfile
+import shutil
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -48,33 +54,6 @@ class GeminiEmbeddingFunction(chromadb.EmbeddingFunction): # Inherit from chroma
             logger.error(f"Embedding error: {e}")
             raise
 
-# IMPORTANT: Data loading should happen once when the app starts, not on every request.
-try:
-    df = pd.read_csv('data/Loyola Site Map Data Table Formatted - Sheet1.csv', names = ['rec_id','uni_id', 'uni_name', 'dept_id', 'dept_name','description','rec_url','date_created','date_modified', 'user_rating', 'tags', 'rec_content'])
-    print("Uploaded Data")
-except FileNotFoundError:
-    print("Warning: CSV file not found. Please adjust path if running locally.")
-    # Create a dummy DataFrame for local testing if file is missing
-    df = pd.DataFrame({
-        'rec_id': [1, 2], 'uni_id': [1, 1], 'uni_name': ['Wesleyan', 'Wesleyan'],
-        'dept_id': ['0', '0'], 'dept_name': ['General', 'General'],
-        'description': ['Desc 1', 'Desc 2'], 'rec_url': ['url1', 'url2'],
-        'date_created': ['today', 'today'], 'date_modified': ['today', 'today'],
-        'user_rating': [5, 5], 'tags': ['tag1', 'tag2'],
-        'rec_content': [
-            "Welcome to the healthcare resources page for undergraduates! Explore our pre-med advising, internships, and research opportunities. We have partnerships with local hospitals and clinics.",
-            "Career services offers resume reviews, interview prep, and career fairs for all students. Schedule an appointment with a career counselor to discuss your interests, including those in healthcare."
-        ]
-    })
-
-
-student_university_id = 1
-student_department_id = '0'
-documents = df.loc[df['dept_id'] == student_department_id, 'rec_content'].tolist()
-
-# --- Initialize ChromaDB (without embeddings initially) ---
-DB_NAME = "googlecardb"
-
 # Initialize ChromaDB with disabled telemetry and anonymous usage stats
 try:
     chroma_client = chromadb.Client(Settings(
@@ -86,12 +65,86 @@ except Exception as e:
     logger.warning(f"ChromaDB settings failed, using basic client: {e}")
     chroma_client = chromadb.Client()
 
-# Global variable to track if documents are loaded
-documents_loaded = False
+# Global dictionaries to track loaded universities and their data
+loaded_universities = {}
+university_data = {}
 
-def get_or_create_collection(api_key):
-    """Get or create ChromaDB collection with user's API key"""
-    global documents_loaded
+# Expected CSV column names for validation
+EXPECTED_COLUMNS = ['rec_id','uni_id', 'uni_name', 'dept_id', 'dept_name','description','rec_url','date_created','date_modified', 'user_rating', 'tags', 'rec_content']
+
+def preload_csv_files():
+    """Preload all CSV files from the data directory at startup"""
+    data_dir = os.path.join(os.path.dirname(__file__), 'data')
+    
+    if not os.path.exists(data_dir):
+        logger.warning(f"Data directory not found: {data_dir}")
+        return
+    
+    # Find all CSV files in the data directory
+    csv_files = glob.glob(os.path.join(data_dir, '*.csv'))
+    
+    for csv_file in csv_files:
+        # Skip Zone.Identifier files and other non-data files
+        if 'Zone.Identifier' in csv_file or csv_file.endswith('.tmp'):
+            continue
+            
+        try:
+            logger.info(f"Loading CSV file: {csv_file}")
+            
+            # Read CSV with expected column names
+            df = pd.read_csv(csv_file, names=EXPECTED_COLUMNS)
+            
+            # Validate CSV structure
+            is_valid, message = validate_csv_structure(df)
+            if not is_valid:
+                logger.warning(f"Skipping invalid CSV file {csv_file}: {message}")
+                continue
+            
+            # Extract university name from the uni_name column
+            university_name = df['uni_name'].iloc[1] if not df.empty else "Unknown University"
+            university_name = str(university_name).strip()
+            
+            # Check if university already exists
+            if university_name in university_data:
+                logger.info(f"University '{university_name}' already loaded, skipping duplicate")
+                continue
+            
+            # Store university data
+            university_data[university_name] = {
+                'name': university_name,
+                'data': df
+            }
+            
+            logger.info(f"Successfully preloaded university: {university_name} with {len(df)} records")
+            
+        except Exception as e:
+            logger.error(f"Error loading CSV file {csv_file}: {e}")
+            continue
+    
+    logger.info(f"Preloaded {len(university_data)} universities from data directory")
+
+def validate_csv_structure(df):
+    """Validate that uploaded CSV has the correct structure"""
+    if df.empty:
+        return False, "CSV file is empty"
+    
+    # Check if all expected columns are present
+    missing_columns = set(EXPECTED_COLUMNS) - set(df.columns)
+    if missing_columns:
+        return False, f"Missing required columns: {', '.join(missing_columns)}"
+    
+    # Check if required fields have data
+    if df['uni_name'].isna().all():
+        return False, "University name column is empty"
+    
+    if df['rec_content'].isna().all():
+        return False, "Content column is empty"
+    
+    return True, "Valid CSV structure"
+
+def get_or_create_collection(api_key, university_name):
+    """Get or create ChromaDB collection for specific university"""
+    collection_name = f"uni_{secure_filename(university_name).replace(' ', '_').lower()}"
     
     try:
         embed_fn = GeminiEmbeddingFunction(api_key=api_key)
@@ -99,33 +152,38 @@ def get_or_create_collection(api_key):
         
         # Try to get existing collection first
         try:
-            db = chroma_client.get_collection(name=DB_NAME)
+            db = chroma_client.get_collection(name=collection_name)
             # Update the embedding function
             db._embedding_function = embed_fn
-            logger.info("Retrieved existing ChromaDB collection")
+            logger.info(f"Retrieved existing ChromaDB collection for {university_name}")
         except Exception:
             # Create new collection if it doesn't exist
-            logger.info("Creating new ChromaDB collection")
-            db = chroma_client.create_collection(name=DB_NAME, embedding_function=embed_fn)
+            logger.info(f"Creating new ChromaDB collection for {university_name}")
+            db = chroma_client.create_collection(name=collection_name, embedding_function=embed_fn)
         
-        # Add documents only once across all requests
-        if not documents_loaded and db.count() == 0:
-            logger.info("Adding documents to ChromaDB...")
-            try:
-                db.add(documents=documents, ids=[str(i) for i in range(len(documents))])
-                documents_loaded = True
-                logger.info(f"Successfully added {len(documents)} documents")
-            except Exception as e:
-                logger.error(f"Error adding documents: {e}")
-                # Continue without documents rather than failing
+        # Add documents if collection is empty and we have data for this university
+        if university_name in university_data and db.count() == 0:
+            uni_data = university_data[university_name]
+            student_department_id = '0'  # Default department
+            df = uni_data['data']
+            documents = df.loc[df['dept_id'] == student_department_id, 'rec_content'].tolist()
+            
+            if documents:
+                logger.info(f"Adding {len(documents)} documents to ChromaDB for {university_name}")
+                try:
+                    db.add(documents=documents, ids=[f"{university_name}_{i}" for i in range(len(documents))])
+                    loaded_universities[university_name] = True
+                    logger.info(f"Successfully added documents for {university_name}")
+                except Exception as e:
+                    logger.error(f"Error adding documents for {university_name}: {e}")
         else:
-            logger.info("ChromaDB already contains documents.")
+            logger.info(f"ChromaDB already contains documents for {university_name}")
         
         return db
         
     except Exception as e:
-        logger.error(f"ChromaDB collection error: {e}")
-        raise Exception("Database initialization failed. Please try again.")
+        logger.error(f"ChromaDB collection error for {university_name}: {e}")
+        raise Exception(f"Database initialization failed for {university_name}. Please try again.")
 
 # --- Flask Routes ---
 
@@ -133,24 +191,126 @@ def get_or_create_collection(api_key):
 def index():
     return render_template('index.html')
 
+@app.route('/api/universities', methods=['GET'])
+def get_universities():
+    """Get list of available universities"""
+    universities = []
+    for name, data in university_data.items():
+        universities.append({
+            'name': name,
+            'document_count': len(data['data']) if 'data' in data else 0
+        })
+    return jsonify({"universities": universities})
+
+@app.route('/api/universities/upload', methods=['POST'])
+def upload_university():
+    """Upload a new university CSV file"""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+    
+    if not file.filename.lower().endswith('.csv'):
+        return jsonify({"error": "Only CSV files are allowed"}), 400
+    
+    try:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(mode='w+b', suffix='.csv', delete=False) as temp_file:
+            file.save(temp_file.name)
+            
+            # Read and validate CSV
+            df = pd.read_csv(temp_file.name, names=EXPECTED_COLUMNS)
+            is_valid, message = validate_csv_structure(df)
+            
+            if not is_valid:
+                os.unlink(temp_file.name)  # Clean up temp file
+                return jsonify({"error": f"Invalid CSV structure: {message}"}), 400
+            
+            # Extract university name from the uni_name column
+            university_name = df['uni_name'].iloc[1] if not df.empty else "Unknown University"
+            university_name = str(university_name).strip()
+            
+            # Check if university already exists
+            if university_name in university_data:
+                os.unlink(temp_file.name)  # Clean up temp file
+                return jsonify({"error": f"University '{university_name}' already exists. Please delete the existing one first if you want to replace it."}), 400
+            
+            # Store university data using the actual university name from CSV
+            university_data[university_name] = {
+                'name': university_name,
+                'data': df
+            }
+            
+            # Clean up temp file
+            os.unlink(temp_file.name)
+            
+            logger.info(f"Successfully uploaded university: {university_name}")
+            return jsonify({
+                "message": f"University '{university_name}' uploaded successfully",
+                "university": {
+                    "name": university_name,
+                    "document_count": len(df)
+                }
+            })
+            
+    except Exception as e:
+        logger.error(f"Error uploading university: {e}")
+        return jsonify({"error": f"Error processing file: {str(e)}"}), 500
+
+@app.route('/api/universities/<university_name>', methods=['DELETE'])
+def delete_university(university_name):
+    """Delete a university database"""
+    if university_name not in university_data:
+        return jsonify({"error": "University not found"}), 404
+    
+    try:
+        # Remove from ChromaDB
+        collection_name = f"uni_{secure_filename(university_name).replace(' ', '_').lower()}"
+        try:
+            chroma_client.delete_collection(name=collection_name)
+            logger.info(f"Deleted ChromaDB collection for {university_name}")
+        except Exception as e:
+            logger.warning(f"Could not delete ChromaDB collection for {university_name}: {e}")
+        
+        # Remove from memory
+        del university_data[university_name]
+        if university_name in loaded_universities:
+            del loaded_universities[university_name]
+        
+        logger.info(f"Successfully deleted university: {university_name}")
+        return jsonify({"message": f"University '{university_name}' deleted successfully"})
+        
+    except Exception as e:
+        logger.error(f"Error deleting university {university_name}: {e}")
+        return jsonify({"error": f"Error deleting university: {str(e)}"}), 500
+
 @app.route('/ask', methods=['POST'])
 def ask_chatbot():
     user_query = request.json.get('query')
     custom_prompt = request.json.get('custom_prompt')
     api_key = request.json.get('api_key')
+    university_name = request.json.get('university_name')
     
     if not user_query:
         return jsonify({"answer": "Please provide a query."}), 400
     
     if not api_key:
         return jsonify({"answer": "Please provide your Google API key in the settings."}), 400
+    
+    if not university_name:
+        return jsonify({"answer": "Please select a university from the dropdown before asking questions."}), 400
+    
+    if university_name not in university_data:
+        return jsonify({"answer": "The selected university is no longer available. Please select a different university."}), 400
 
     try:
         # Initialize client with user's API key
         client = genai.Client(api_key=api_key)
         
-        # Get or create collection with user's API key
-        db = get_or_create_collection(api_key)
+        # Get or create collection for selected university
+        db = get_or_create_collection(api_key, university_name)
         
         # Create embedding function for query
         embed_fn = GeminiEmbeddingFunction(api_key=api_key)
@@ -171,22 +331,22 @@ def ask_chatbot():
         if custom_prompt:
             base_prompt = custom_prompt.strip()
         else:
-            base_prompt = """You are a helpful and informative bot that answers questions from undergraduate students asking about career services and using text from the reference passage included below.
-Be sure to respond in a complete sentence, being comprehensive, including all relevant background information. Be sure to break down complicated concepts and
-strike a friendly and conversational tone. Give additional advice on top of the given text on how the student can maximize the value of the resource. If the passage is irrelevant to the answer, you may ignore it.
+            base_prompt = f"""You are a helpful and informative bot that answers questions from undergraduate students asking about career services at {university_name} using text from the reference passage included below.
+                            Be sure to respond in a complete sentence, being comprehensive, including all relevant background information. Be sure to break down complicated concepts and
+                            strike a friendly and conversational tone. Give additional advice on top of the given text on how the student can maximize the value of the resource. If the passage is irrelevant to the answer, you may ignore it.
 
-**Please format your response using Markdown, including bullet points, bold text, and proper spacing where appropriate.**"""
+                            **Please format your response using Markdown, including bullet points, bold text, and proper spacing where appropriate.**"""
 
-        prompt = f"""{base_prompt}
+        prompt = f"""University: {university_name}. If anyone asks the university name or what university this is for answer with that.
+        {base_prompt}
 
-QUESTION: {query_oneline}
-"""
+        QUESTION: {query_oneline}
+        """
         
         # Add *only* the retrieved passages to the prompt
         for passage in retrieved_passages:
             passage_oneline = passage.replace("\n", " ")
             prompt += f"PASSAGE: {passage_oneline}\n"
-
         try:
             gemini_answer = client.models.generate_content(
                 model="gemini-2.0-flash",
@@ -218,5 +378,9 @@ QUESTION: {query_oneline}
     return jsonify({"answer": answer_text})
 
 if __name__ == '__main__':
+    # Preload CSV files from data directory at startup
+    logger.info("Starting application and preloading CSV files...")
+    preload_csv_files()
+    
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)

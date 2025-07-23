@@ -215,8 +215,12 @@
                 </button>
             </div>
             
-            <button id="change-prompt-btn" class="w-full text-left text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200 py-2 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+            <button id="change-prompt-btn" class="w-full text-left text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200 py-2 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700 mb-2">
                 Change Prompt
+            </button>
+            
+            <button id="manage-universities-btn" class="w-full text-left text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200 py-2 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+                Manage Universities
             </button>
         </div>
 
@@ -257,9 +261,131 @@
             </div>
         </div>
 
-        <!-- Title (Centered at top) -->
-        <div class="flex justify-center pt-8 pb-4 z-10">
+        <!-- University Management Modal -->
+        <div id="university-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-4xl mx-4 max-h-[80vh] overflow-hidden">
+                <div class="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+                    <h2 class="text-xl font-semibold text-gray-900 dark:text-white">Manage Universities</h2>
+                    <button id="university-modal-close" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors duration-200">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <div class="p-6 overflow-y-auto max-h-[60vh]">
+                    <!-- Upload Section -->
+                    <div class="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                        <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-3">Upload New University</h3>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                            Upload a CSV file with university data. The file must have the same structure as the original format.
+                        </p>
+                        
+                        <div class="flex items-center justify-center w-full">
+                            <label for="university-file-input" class="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 dark:hover:bg-gray-800 dark:bg-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:hover:border-gray-500">
+                                <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                                    <svg class="w-8 h-8 mb-4 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                                    </svg>
+                                    <p class="mb-2 text-sm text-gray-500 dark:text-gray-400"><span class="font-semibold">Click to upload</span> or drag and drop</p>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400">CSV files only</p>
+                                </div>
+                                <input id="university-file-input" type="file" class="hidden" accept=".csv" />
+                            </label>
+                        </div>
+                        
+                        <!-- Upload Status -->
+                        <div id="upload-status" class="mt-4 hidden">
+                            <div id="upload-progress" class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 hidden">
+                                <div id="upload-progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                            </div>
+                            <p id="upload-message" class="text-sm mt-2"></p>
+                        </div>
+                    </div>
+                    
+                    <!-- Existing Universities -->
+                    <div>
+                        <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Existing Universities</h3>
+                                                 <div id="universities-list" class="space-y-3">
+                             <!-- Universities will be populated here -->
+                         </div>
+                     </div>
+                 </div>
+                 
+                 
+
+        <!-- University Selection Prompt Modal -->
+        <div id="university-selection-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md mx-4">
+                <div class="p-6 text-center">
+                    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 dark:bg-blue-900/20 mb-4">
+                        <svg class="h-6 w-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Select a University</h3>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                        Please select a university from the dropdown or upload a new university database to get started.
+                    </p>
+                    <div class="flex flex-col gap-3">
+                        <button id="selection-upload-btn" class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors duration-200">
+                            Upload University Data
+                        </button>
+                        <button id="selection-close-btn" class="w-full px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded-lg transition-colors duration-200">
+                            Select from Dropdown
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+                
+                 <div class="flex items-center justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-700">
+                    <button id="university-modal-close-btn" class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Header with University Dropdown and Title -->
+        <div class="flex items-center justify-between pt-8 pb-4 px-4 z-10">
+            <!-- University Dropdown (Left) -->
+            <div class="flex-1 max-w-xs">
+                <div class="relative">
+                    <button id="university-dropdown-btn" class="w-full flex items-center justify-between px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-200">
+                        <span id="selected-university" class="text-sm font-medium text-gray-900 dark:text-white truncate">Loading...</span>
+                        <svg class="w-4 h-4 ml-2 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </button>
+                    
+                    <!-- Dropdown Menu -->
+                    <div id="university-dropdown-menu" class="hidden absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-hidden">
+                        <!-- Search Input -->
+                        <div class="p-2 border-b border-gray-200 dark:border-gray-600">
+                            <input 
+                                type="text" 
+                                id="university-search" 
+                                placeholder="Search universities..."
+                                class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 focus:border-blue-500 dark:focus:border-blue-400 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                            >
+                        </div>
+                        
+                        <!-- University List -->
+                        <div id="university-list" class="max-h-48 overflow-y-auto">
+                            <!-- Universities will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Title (Center) -->
+            <div class="flex-1 text-center">
             <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">Chatbot Demo</h1>
+            </div>
+            
+            <!-- Spacer for balance -->
+            <div class="flex-1 max-w-xs"></div>
         </div>
 
         <!-- Chat Container -->
