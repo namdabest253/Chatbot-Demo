@@ -166,12 +166,33 @@ def get_or_create_collection(api_key, university_name):
             uni_data = university_data[university_name]
             student_department_id = '0'  # Default department
             df = uni_data['data']
-            documents = df.loc[df['dept_id'] == student_department_id, 'rec_content'].tolist()
+            
+            # Filter data for the department
+            dept_data = df.loc[df['dept_id'] == student_department_id]
+            
+            # Combine content and URL for storage and retrieval
+            documents = []
+            metadatas = []
+            for _, row in dept_data.iterrows():
+                content = str(row['rec_content']) if pd.notna(row['rec_content']) else ""
+                url = str(row['rec_url']) if pd.notna(row['rec_url']) else ""
+                
+                # Store content for embedding but keep URL in metadata
+                documents.append(content)
+                metadatas.append({
+                    'rec_url': url,
+                    'rec_id': str(row['rec_id']) if pd.notna(row['rec_id']) else "",
+                    'description': str(row['description']) if pd.notna(row['description']) else ""
+                })
             
             if documents:
                 logger.info(f"Adding {len(documents)} documents to ChromaDB for {university_name}")
                 try:
-                    db.add(documents=documents, ids=[f"{university_name}_{i}" for i in range(len(documents))])
+                    db.add(
+                        documents=documents, 
+                        metadatas=metadatas,
+                        ids=[f"{university_name}_{i}" for i in range(len(documents))]
+                    )
                     loaded_universities[university_name] = True
                     logger.info(f"Successfully added documents for {university_name}")
                 except Exception as e:
@@ -318,11 +339,13 @@ def ask_chatbot():
 
         # Search the Chroma DB using the specified query.
         try:
-            result = db.query(query_texts=[user_query], n_results=5) # Retrieve top 5 passages
-            retrieved_passages = result["documents"][0] if result["documents"] else []
+            result = db.query(query_texts=[user_query], n_results=10) # Retrieve top 5 passages
+            retrieved_documents = result["documents"][0] if result["documents"] else []
+            retrieved_metadatas = result["metadatas"][0] if result["metadatas"] else []
         except Exception as e:
             logger.error(f"ChromaDB query error: {e}")
-            retrieved_passages = []  # Continue without retrieved passages
+            retrieved_documents = []  # Continue without retrieved passages
+            retrieved_metadatas = []
 
         # Construct the prompt for Gemini
         query_oneline = user_query.replace("\n", " ")
@@ -343,16 +366,46 @@ def ask_chatbot():
         QUESTION: {query_oneline}
         """
         
-        # Add *only* the retrieved passages to the prompt
-        for passage in retrieved_passages:
+        # Add retrieved passages with their URLs to the prompt
+        sources = []
+        for i, (passage, metadata) in enumerate(zip(retrieved_documents, retrieved_metadatas)):
             passage_oneline = passage.replace("\n", " ")
-            prompt += f"PASSAGE: {passage_oneline}\n"
+            prompt += f"PASSAGE {i+1}: {passage_oneline}\n"
+            
+            # Collect source URLs for reference
+            if metadata and metadata.get('rec_url'):
+                url = metadata['rec_url']
+                if url and url.strip() and url.lower() not in ['nan', 'none', '']:
+                    sources.append(url)
+        
         try:
             gemini_answer = client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=prompt
             )
             answer_text = gemini_answer.text
+            
+            # Append sources if available
+            if sources:
+                unique_sources = list(dict.fromkeys(sources))  # Remove duplicates while preserving order
+                
+                # Format sources as HTML links that open in new tabs
+                formatted_links = []
+                for url in unique_sources:
+                    # Create a display text from the URL (use domain or full URL)
+                    try:
+                        from urllib.parse import urlparse
+                        parsed = urlparse(url)
+                        display_text = parsed.netloc if parsed.netloc else url
+                    except:
+                        display_text = url
+                    
+                    # Create HTML link with styling
+                    link_html = f'<a href="{url}" target="_blank" rel="noopener noreferrer" style="color: #007bff; text-decoration: underline; transition: color 0.3s ease;" onmouseover="this.style.color=\'#0056b3\'" onmouseout="this.style.color=\'#007bff\'" title="Click to open in new tab">{display_text}...</a>'
+                    formatted_links.append(link_html)
+                
+                answer_text += f"\n\n**Sources:**\n\n{("\n\n").join(formatted_links)}"
+                
         except Exception as e:
             logger.error(f"Gemini API Error: {e}")
             # More specific error messages
