@@ -91,8 +91,19 @@ def preload_csv_files():
         try:
             logger.info(f"Loading CSV file: {csv_file}")
             
-            # Read CSV with expected column names
-            df = pd.read_csv(csv_file, names=EXPECTED_COLUMNS)
+            # Try multiple encodings to handle different file formats
+            df = None
+            for encoding in ['utf-8', 'windows-1252', 'cp1252', 'iso-8859-1', 'latin-1']:
+                try:
+                    df = pd.read_csv(csv_file, names=EXPECTED_COLUMNS, encoding=encoding)
+                    logger.info(f"Successfully read {csv_file} with {encoding} encoding")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if df is None:
+                logger.error(f"Could not read {csv_file} with any supported encoding")
+                continue
             
             # Validate CSV structure
             is_valid, message = validate_csv_structure(df)
@@ -241,8 +252,20 @@ def upload_university():
         with tempfile.NamedTemporaryFile(mode='w+b', suffix='.csv', delete=False) as temp_file:
             file.save(temp_file.name)
             
-            # Read and validate CSV
-            df = pd.read_csv(temp_file.name, names=EXPECTED_COLUMNS)
+            # Read and validate CSV with encoding handling
+            df = None
+            for encoding in ['utf-8', 'windows-1252', 'cp1252', 'iso-8859-1', 'latin-1']:
+                try:
+                    df = pd.read_csv(temp_file.name, names=EXPECTED_COLUMNS, encoding=encoding)
+                    logger.info(f"Successfully read uploaded file with {encoding} encoding")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if df is None:
+                os.unlink(temp_file.name)  # Clean up temp file
+                return jsonify({"error": "Could not read CSV file with any supported encoding. Please ensure your file is saved with UTF-8, Windows-1252, or Latin-1 encoding."}), 400
+            
             is_valid, message = validate_csv_structure(df)
             
             if not is_valid:
@@ -339,7 +362,7 @@ def ask_chatbot():
 
         # Search the Chroma DB using the specified query.
         try:
-            result = db.query(query_texts=[user_query], n_results=10) # Retrieve top 5 passages
+            result = db.query(query_texts=[user_query], n_results=15) # Retrieve top 15 passages
             retrieved_documents = result["documents"][0] if result["documents"] else []
             retrieved_metadatas = result["metadatas"][0] if result["metadatas"] else []
         except Exception as e:
@@ -379,6 +402,7 @@ def ask_chatbot():
                     sources.append(url)
         
         try:
+            print(prompt)
             gemini_answer = client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=prompt
